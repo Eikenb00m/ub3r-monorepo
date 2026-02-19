@@ -1,6 +1,6 @@
 # Simple PHP Account Website
 
-A minimal PHP + HTML account portal with registration, login, downloads, activation, forgot-password, and in-session change-password flows compatible with the current Ub3r password-hash flow.
+A minimal PHP + HTML account portal with registration, login, downloads, activation, forgot-password, in-session change-password flows, and Discord account linking with verified-role assignment compatible with the current Ub3r password-hash flow.
 
 ## Getting started
 
@@ -13,6 +13,12 @@ A minimal PHP + HTML account portal with registration, login, downloads, activat
    - `app.discord_url` (invite link for your Discord community)
    - `brevo.api_key`
    - `brevo.sender_email`
+   - `discord.client_id`
+   - `discord.client_secret`
+   - `discord.redirect_uri`
+   - `discord.guild_id`
+   - `discord.verified_role_id`
+   - `discord.bot_token`
    - `turnstile.site_key`
    - `turnstile.secret_key`
 4. Start locally:
@@ -38,7 +44,9 @@ This demo uses the same flow as the game server:
 - Clicking the link changes the account to `usergroupid = 40` (active), which is required for login.
 - Expired activation links auto-ban the account (`usergroupid = 8`).
 - Registration blocks duplicate usernames and duplicate email addresses.
-- Successful login redirects users to `?page=download` with one game client `.jar` download button, one Java download button, and one Discord button.
+- Successful login redirects users to `?page=download` with one game client `.jar` download button, one Java download button, and Discord actions.
+- Users can link Discord through `?page=discord-link` (OAuth2 `identify guilds.join`) and the site stores links in `user_discord_links`, including Discord username and Discord display name.
+- The new `DiscordRoleManager` module assigns/refreshes the verified Discord role using the configured bot token.
 - Forgot password stores reset tokens in `user_password_reset_tokens` and emails `?page=reset-password&token=...` links for active accounts.
 - Signed-in users can change their password from `?page=change-password` by confirming their current password.
 

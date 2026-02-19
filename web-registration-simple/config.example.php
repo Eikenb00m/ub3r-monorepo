@@ -22,6 +22,15 @@ return [
         'sender_email' => 'noreply@example.com',
         'sender_name' => 'Dodian',
     ],
+
+    'discord' => [
+        'client_id' => '123456789012345678',
+        'client_secret' => 'REPLACE_ME',
+        'redirect_uri' => 'http://localhost:8080/?page=discord-callback',
+        'guild_id' => '123456789012345678',
+        'verified_role_id' => '123456789012345678',
+        'bot_token' => 'REPLACE_ME',
+    ],
     'turnstile' => [
         'site_key' => '0x4AAAAA-REPLACE_ME',
         'secret_key' => '0x4AAAAA-REPLACE_ME',

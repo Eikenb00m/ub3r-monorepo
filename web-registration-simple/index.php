@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 session_start();
 
+require_once __DIR__ . '/DiscordRoleManager.php';
+
 const INACTIVE_USERGROUP_ID = 3;
 const ACTIVE_USERGROUP_ID = 40;
 const BANNED_USERGROUP_ID = 8;
@@ -125,6 +127,148 @@ function ensurePasswordResetTable(PDO $pdo): void
     );
 }
 
+function ensureDiscordLinksTable(PDO $pdo): void
+{
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS user_discord_links (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            user_id INT UNSIGNED NOT NULL,
+            discord_user_id VARCHAR(32) NOT NULL,
+            discord_username VARCHAR(255) NOT NULL,
+            discord_display_name VARCHAR(255) NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            UNIQUE KEY unique_user_id (user_id),
+            UNIQUE KEY unique_discord_user_id (discord_user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+    );
+
+    $pdo->exec(
+        'ALTER TABLE user_discord_links
+         ADD COLUMN IF NOT EXISTS discord_display_name VARCHAR(255) NOT NULL DEFAULT "" AFTER discord_username'
+    );
+}
+
+function discordConfig(array $config): array
+{
+    return $config['discord'] ?? [];
+}
+
+function discordRedirectUri(array $config): string
+{
+    $discord = discordConfig($config);
+    $configured = trim((string)($discord['redirect_uri'] ?? ''));
+    if ($configured !== '') {
+        return $configured;
+    }
+
+    return buildAppUrl($config, '?page=discord-callback');
+}
+
+function discordAuthorizationUrl(array $config, string $state): string
+{
+    $discord = discordConfig($config);
+    $clientId = trim((string)($discord['client_id'] ?? ''));
+    if ($clientId === '') {
+        throw new RuntimeException('Discord OAuth is not configured. Add discord.client_id in config.php.');
+    }
+
+    return 'https://discord.com/oauth2/authorize?' . http_build_query([
+        'client_id' => $clientId,
+        'response_type' => 'code',
+        'redirect_uri' => discordRedirectUri($config),
+        'scope' => 'identify guilds.join',
+        'prompt' => 'consent',
+        'state' => $state,
+    ]);
+}
+
+function discordExchangeCodeForToken(array $config, string $code): array
+{
+    $discord = discordConfig($config);
+    $clientId = trim((string)($discord['client_id'] ?? ''));
+    $clientSecret = trim((string)($discord['client_secret'] ?? ''));
+
+    if ($clientId === '' || $clientSecret === '') {
+        throw new RuntimeException('Discord OAuth is not configured. Add discord.client_id and discord.client_secret in config.php.');
+    }
+
+    $payload = http_build_query([
+        'client_id' => $clientId,
+        'client_secret' => $clientSecret,
+        'grant_type' => 'authorization_code',
+        'code' => $code,
+        'redirect_uri' => discordRedirectUri($config),
+    ]);
+
+    $ch = curl_init('https://discord.com/api/v10/oauth2/token');
+    if ($ch === false) {
+        throw new RuntimeException('Failed to initialize Discord token request.');
+    }
+
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded'],
+        CURLOPT_POSTFIELDS => $payload,
+        CURLOPT_TIMEOUT => 15,
+    ]);
+
+    $response = curl_exec($ch);
+    $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+
+    if ($response === false) {
+        throw new RuntimeException('Discord token request failed: ' . $error);
+    }
+
+    if ($status < 200 || $status >= 300) {
+        throw new RuntimeException('Discord token API returned HTTP ' . $status . ': ' . $response);
+    }
+
+    $decoded = json_decode($response, true);
+    if (!is_array($decoded)) {
+        throw new RuntimeException('Discord token API returned invalid JSON.');
+    }
+
+    return $decoded;
+}
+
+function discordFetchCurrentUser(string $accessToken): array
+{
+    $ch = curl_init('https://discord.com/api/v10/users/@me');
+    if ($ch === false) {
+        throw new RuntimeException('Failed to initialize Discord user request.');
+    }
+
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $accessToken],
+        CURLOPT_TIMEOUT => 15,
+    ]);
+
+    $response = curl_exec($ch);
+    $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+
+    if ($response === false) {
+        throw new RuntimeException('Discord user request failed: ' . $error);
+    }
+
+    if ($status < 200 || $status >= 300) {
+        throw new RuntimeException('Discord user API returned HTTP ' . $status . ': ' . $response);
+    }
+
+    $decoded = json_decode($response, true);
+    if (!is_array($decoded)) {
+        throw new RuntimeException('Discord user API returned invalid JSON.');
+    }
+
+    return $decoded;
+}
+
 function banExpiredPendingAccounts(PDO $pdo): void
 {
     $banExpired = $pdo->prepare(
@@ -233,10 +377,12 @@ $javaDownloadUrl = $configMissing ? 'https://www.java.com/download/' : trim((str
 $discordUrl = $configMissing ? 'https://discord.gg/' : trim((string)($config['app']['discord_url'] ?? 'https://discord.gg/'));
 
 $page = isset($_GET['page']) && is_string($_GET['page']) ? strtolower(trim($_GET['page'])) : '';
-$allowedPages = ['login', 'register', 'forgot-password', 'download', 'reset-password', 'change-password', 'activate'];
+$allowedPages = ['login', 'register', 'forgot-password', 'download', 'reset-password', 'change-password', 'activate', 'discord-link', 'discord-callback'];
 if (!in_array($page, $allowedPages, true)) {
     $page = isset($_SESSION['user_id']) ? 'download' : 'login';
 }
+
+$discordLink = null;
 
 if ($page === 'activate' && isset($_GET['token']) && is_string($_GET['token']) && $_GET['token'] !== '') {
     $token = trim($_GET['token']);
@@ -286,6 +432,92 @@ if ($page === 'activate' && isset($_GET['token']) && is_string($_GET['token']) &
             $errors[] = 'Could not activate account right now. Please try again later.';
             error_log('Activation error: ' . $e->getMessage());
             $page = 'login';
+        }
+    }
+}
+
+
+if ($page === 'discord-link') {
+    if (!isset($_SESSION['user_id'])) {
+        $infoMessage = 'Please sign in first.';
+        $page = 'login';
+    } elseif (requireConfiguredOrFail($configMissing, $errors)) {
+        try {
+            $state = bin2hex(random_bytes(16));
+            $_SESSION['discord_oauth_state'] = $state;
+            redirectTo(discordAuthorizationUrl($config, $state));
+        } catch (Throwable $e) {
+            $errors[] = 'Could not start Discord linking right now. Please try again later.';
+            error_log('Discord oauth start error: ' . $e->getMessage());
+            $page = 'download';
+        }
+    }
+}
+
+if ($page === 'discord-callback') {
+    if (!isset($_SESSION['user_id'])) {
+        $infoMessage = 'Please sign in first.';
+        $page = 'login';
+    } else {
+        $stateFromQuery = isset($_GET['state']) && is_string($_GET['state']) ? trim($_GET['state']) : '';
+        $code = isset($_GET['code']) && is_string($_GET['code']) ? trim($_GET['code']) : '';
+        $expectedState = isset($_SESSION['discord_oauth_state']) && is_string($_SESSION['discord_oauth_state']) ? $_SESSION['discord_oauth_state'] : '';
+        unset($_SESSION['discord_oauth_state']);
+
+        if ($code === '' || $stateFromQuery === '' || $expectedState === '' || !hash_equals($expectedState, $stateFromQuery)) {
+            $errors[] = 'Discord link request is invalid or expired. Please try again.';
+            $page = 'download';
+        } elseif (requireConfiguredOrFail($configMissing, $errors)) {
+            try {
+                $pdo = pdoFromConfig($config);
+                ensureDiscordLinksTable($pdo);
+
+                $tokenData = discordExchangeCodeForToken($config, $code);
+                $accessToken = (string)($tokenData['access_token'] ?? '');
+                if ($accessToken === '') {
+                    throw new RuntimeException('Discord token response did not include an access token.');
+                }
+
+                $discordUser = discordFetchCurrentUser($accessToken);
+                $discordUserId = trim((string)($discordUser['id'] ?? ''));
+                $discordUsername = trim((string)($discordUser['username'] ?? 'Discord user'));
+                $discordGlobalName = trim((string)($discordUser['global_name'] ?? ''));
+                $discordDisplayName = $discordGlobalName !== '' ? $discordGlobalName : $discordUsername;
+                if ($discordUserId === '') {
+                    throw new RuntimeException('Discord user response did not include an id.');
+                }
+
+                $discordConfig = discordConfig($config);
+                $roleManager = new DiscordRoleManager(
+                    trim((string)($discordConfig['bot_token'] ?? '')),
+                    trim((string)($discordConfig['guild_id'] ?? '')),
+                    trim((string)($discordConfig['verified_role_id'] ?? ''))
+                );
+                $roleManager->assignVerifiedRole($discordUserId, $accessToken);
+
+                $upsert = $pdo->prepare(
+                    'INSERT INTO user_discord_links (user_id, discord_user_id, discord_username, discord_display_name, created_at, updated_at)
+                     VALUES (:user_id, :discord_user_id, :discord_username, :discord_display_name, NOW(), NOW())
+                     ON DUPLICATE KEY UPDATE
+                        discord_user_id = VALUES(discord_user_id),
+                        discord_username = VALUES(discord_username),
+                        discord_display_name = VALUES(discord_display_name),
+                        updated_at = NOW()'
+                );
+                $upsert->execute([
+                    'user_id' => (int)$_SESSION['user_id'],
+                    'discord_user_id' => $discordUserId,
+                    'discord_username' => $discordUsername,
+                    'discord_display_name' => $discordDisplayName,
+                ]);
+
+                $successMessage = 'Discord account linked successfully. You now have access to the verified role flow.';
+                $page = 'download';
+            } catch (Throwable $e) {
+                $errors[] = 'Could not link Discord right now. Please try again later.';
+                error_log('Discord link callback error: ' . $e->getMessage());
+                $page = 'download';
+            }
         }
     }
 }
@@ -691,9 +923,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 }
 
-if (($page === 'download' || $page === 'change-password') && !isset($_SESSION['user_id'])) {
+if (($page === 'download' || $page === 'change-password' || $page === 'discord-link' || $page === 'discord-callback') && !isset($_SESSION['user_id'])) {
     $infoMessage = 'Please sign in first.';
     $page = 'login';
+}
+
+
+if ($page === 'download' && isset($_SESSION['user_id']) && requireConfiguredOrFail($configMissing, $errors)) {
+    try {
+        $pdo = pdoFromConfig($config);
+        ensureDiscordLinksTable($pdo);
+        $discordLookup = $pdo->prepare(
+            'SELECT discord_username, discord_display_name
+             FROM user_discord_links
+             WHERE user_id = :user_id
+             LIMIT 1'
+        );
+        $discordLookup->execute(['user_id' => (int)$_SESSION['user_id']]);
+        $discordLink = $discordLookup->fetch();
+    } catch (Throwable $e) {
+        error_log('Discord link lookup error: ' . $e->getMessage());
+    }
 }
 
 $resetTokenFromQuery = isset($_GET['token']) && is_string($_GET['token']) ? trim($_GET['token']) : '';
@@ -911,6 +1161,10 @@ $resetTokenFromQuery = isset($_GET['token']) && is_string($_GET['token']) ? trim
             <a class="btn-link" href="<?= htmlspecialchars($clientJarUrl, ENT_QUOTES, 'UTF-8') ?>">Download game client</a>
             <a class="btn-link secondary" href="<?= htmlspecialchars($javaDownloadUrl, ENT_QUOTES, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">Download Java</a>
             <a class="btn-link discord" href="<?= htmlspecialchars($discordUrl, ENT_QUOTES, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">Join Discord</a>
+            <a class="btn-link" href="?page=discord-link">Koppel Discord account (Verified role)</a>
+            <?php if ($discordLink): ?>
+                <p class="meta">Discord gekoppeld als <strong><?= htmlspecialchars((string)$discordLink['discord_display_name'], ENT_QUOTES, 'UTF-8') ?></strong> (@<?= htmlspecialchars((string)$discordLink['discord_username'], ENT_QUOTES, 'UTF-8') ?>).</p>
+            <?php endif; ?>
             <a class="btn-link secondary" href="?page=change-password">Change password</a>
             <a class="btn-link secondary" href="?logout=1">Sign out</a>
         </div>
