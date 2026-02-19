@@ -16,6 +16,7 @@ A minimal PHP + HTML account portal with registration, login, downloads, activat
    - `discord.client_id`
    - `discord.client_secret`
    - `discord.redirect_uri`
+   - `discord.oauth_scopes` (default `identify guilds.join`)
    - `discord.guild_id`
    - `discord.verified_role_id`
    - `discord.bot_token`
@@ -56,3 +57,12 @@ This demo uses the same flow as the game server:
 - Cloudflare Turnstile is integrated and validated server-side for each registration.
 - Add rate limiting as a second layer.
 - Never commit `config.php` to git.
+
+
+## Discord OAuth troubleshooting
+
+If Discord shows **Invalid OAuth2 redirect_uri** while linking:
+
+- Ensure `discord.redirect_uri` in `config.php` is **exactly** the same as your Discord app Redirect URL (including protocol, host, trailing slash, and query string).
+- Add the exact same URL under **Discord Developer Portal → OAuth2 → Redirects**.
+- Default scopes are `identify guilds.join`; you can override via `discord.oauth_scopes`.

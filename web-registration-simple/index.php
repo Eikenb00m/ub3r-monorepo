@@ -173,14 +173,19 @@ function discordAuthorizationUrl(array $config, string $state): string
         throw new RuntimeException('Discord OAuth is not configured. Add discord.client_id in config.php.');
     }
 
+    $scopes = trim((string)($discord['oauth_scopes'] ?? 'identify guilds.join'));
+    if ($scopes == '') {
+        $scopes = 'identify guilds.join';
+    }
+
     return 'https://discord.com/oauth2/authorize?' . http_build_query([
         'client_id' => $clientId,
         'response_type' => 'code',
         'redirect_uri' => discordRedirectUri($config),
-        'scope' => 'identify guilds.join',
+        'scope' => $scopes,
         'prompt' => 'consent',
         'state' => $state,
-    ]);
+    ], '', '&', PHP_QUERY_RFC3986);
 }
 
 function discordExchangeCodeForToken(array $config, string $code): array
@@ -514,7 +519,7 @@ if ($page === 'discord-callback') {
                 $successMessage = 'Discord account linked successfully. You now have access to the verified role flow.';
                 $page = 'download';
             } catch (Throwable $e) {
-                $errors[] = 'Could not link Discord right now. Please try again later.';
+                $errors[] = 'Could not link Discord right now. Please try again later. Check that discord.redirect_uri exactly matches the Redirect URL in your Discord application settings.';
                 error_log('Discord link callback error: ' . $e->getMessage());
                 $page = 'download';
             }

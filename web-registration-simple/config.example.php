@@ -27,6 +27,7 @@ return [
         'client_id' => '123456789012345678',
         'client_secret' => 'REPLACE_ME',
         'redirect_uri' => 'http://localhost:8080/?page=discord-callback',
+        'oauth_scopes' => 'identify guilds.join',
         'guild_id' => '123456789012345678',
         'verified_role_id' => '123456789012345678',
         'bot_token' => 'REPLACE_ME',
