@@ -35,7 +35,10 @@ public class CacheDownloader {
 				/**
 				 * Unzip the downloaded cache file
 				 */
-				Unzip.unZipIt(SignLink.findcachedir() + CACHE_NAME, SignLink.findcachedir(), true);
+				boolean unzipped = Unzip.unZipIt(SignLink.findcachedir() + CACHE_NAME, SignLink.findcachedir(), true);
+				if (!unzipped) {
+					throw new IllegalStateException("Could not unzip downloaded cache file.");
+				}
 
 				/**
 				 * Write new version
