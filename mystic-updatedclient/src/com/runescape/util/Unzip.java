@@ -3,6 +3,7 @@ package com.runescape.util;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -14,7 +15,7 @@ public class Unzip {
 	 * @param output zip file output folder
 	 * @param deleteAfter		Should the zip file be deleted afterwards?
 	 */
-	public static void unZipIt(String zipFile, String outputFolder, boolean deleteAfter) {
+	public static boolean unZipIt(String zipFile, String outputFolder, boolean deleteAfter) {
 
 		byte[] buffer = new byte[1024];
 
@@ -27,42 +28,54 @@ public class Unzip {
 			}
 
 			//get the zip file content
-			ZipInputStream zis =
-					new ZipInputStream(new FileInputStream(zipFile));
-			//get the zipped file list entry
-			ZipEntry ze = zis.getNextEntry();
+			try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipFile))) {
+				//get the zipped file list entry
+				ZipEntry ze = zis.getNextEntry();
+				while(ze!=null){
 
-			while(ze!=null){
+					String fileName = ze.getName();
+					File newFile = new File(outputFolder + File.separator + fileName);
+					String destinationPath = folder.getCanonicalPath() + File.separator;
+					String entryPath = newFile.getCanonicalPath();
 
-				String fileName = ze.getName();
-				File newFile = new File(outputFolder + File.separator + fileName);
+					if (!entryPath.startsWith(destinationPath)) {
+						throw new IOException("Blocked zip entry outside destination: " + fileName);
+					}
 
-				System.out.println("file unzip : "+ newFile.getAbsoluteFile());
+					System.out.println("file unzip : "+ newFile.getAbsoluteFile());
 
-				//create all non exists folders
-				//else you will hit FileNotFoundException for compressed folder
-				new File(newFile.getParent()).mkdirs();
+					if (ze.isDirectory()) {
+						newFile.mkdirs();
+						ze = zis.getNextEntry();
+						continue;
+					}
 
-				FileOutputStream fos = new FileOutputStream(newFile);
+					//create all non exists folders
+					//else you will hit FileNotFoundException for compressed folder
+					new File(newFile.getParent()).mkdirs();
 
-				int len;
-				while ((len = zis.read(buffer)) > 0) {
-					fos.write(buffer, 0, len);
+					try (FileOutputStream fos = new FileOutputStream(newFile)) {
+						int len;
+						while ((len = zis.read(buffer)) > 0) {
+							fos.write(buffer, 0, len);
+						}
+					}
+
+					ze = zis.getNextEntry();
 				}
 
-				fos.close();
-				ze = zis.getNextEntry();
+				zis.closeEntry();
 			}
-
-			zis.closeEntry();
-			zis.close();
 			
 			if(deleteAfter) {
 				new File(zipFile).delete();
 			}
 
+			return true;
+
 		}catch(Exception ex){
 			ex.printStackTrace();
+			return false;
 		}
 	}
 
